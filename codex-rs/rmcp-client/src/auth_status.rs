@@ -274,9 +274,31 @@ async fn discover_streamable_http_oauth_with_manager(
                 scopes_supported: normalize_scopes(metadata.scopes_supported),
             }))
         }
-        Err(AuthError::NoAuthorizationSupport) => Ok(None),
+        Err(err) if oauth_discovery_indicates_no_authorization_support(&err) => Ok(None),
         Err(err) => Err(err.into()),
     }
+}
+
+/// RFC 8414 / RFC 9728 advertise missing OAuth metadata as HTTP 404.
+/// Treat that as "this server does not do OAuth" rather than an unknown
+/// discovery failure that later nags `codex mcp login`.
+fn oauth_discovery_indicates_no_authorization_support(error: &AuthError) -> bool {
+    if matches!(error, AuthError::NoAuthorizationSupport) {
+        return true;
+    }
+    if let AuthError::MetadataError(reason) = error
+        && oauth_metadata_error_is_not_found(reason)
+    {
+        return true;
+    }
+    oauth_metadata_error_is_not_found(&error.to_string())
+}
+
+fn oauth_metadata_error_is_not_found(message: &str) -> bool {
+    let not_found = StatusCode::NOT_FOUND.as_u16().to_string();
+    message
+        .split(|c: char| !c.is_ascii_digit())
+        .any(|token| token == not_found)
 }
 
 fn normalize_scopes(scopes_supported: Option<Vec<String>>) -> Option<Vec<String>> {
@@ -628,6 +650,71 @@ mod tests {
         );
         redirect_target.verify().await;
         resource_server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn determine_auth_status_treats_missing_well_known_oauth_metadata_as_unsupported() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(
+                StatusCode::METHOD_NOT_ALLOWED.as_u16(),
+            ))
+            .mount(&server)
+            .await;
+        for well_known in [
+            "/.well-known/oauth-protected-resource",
+            "/.well-known/oauth-protected-resource/mcp",
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/oauth-authorization-server/mcp",
+        ] {
+            Mock::given(method("GET"))
+                .and(path(well_known))
+                .respond_with(ResponseTemplate::new(StatusCode::NOT_FOUND.as_u16()))
+                .mount(&server)
+                .await;
+        }
+
+        let url = format!("{}/mcp", server.uri());
+        let status = determine_streamable_http_auth_status(
+            "anonymous-hub",
+            &url,
+            /*bearer_token_env_var*/ None,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            OAuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+            test_http_client(),
+            OAuthDiscoveryTimeout::LOCAL,
+            StreamableHttpRedirectMode::Legacy,
+        )
+        .await
+        .expect("404 well-known OAuth metadata must not be an auth-status failure");
+        assert_eq!(status, McpAuthState::Unsupported);
+
+        let discovery = discover_streamable_http_oauth(
+            &url,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            test_http_client(),
+            OAuthDiscoveryTimeout::LOCAL,
+            StreamableHttpRedirectMode::Legacy,
+        )
+        .await
+        .expect("404 well-known OAuth metadata must not be a discovery failure");
+        assert_eq!(discovery, None);
+    }
+
+    #[test]
+    fn oauth_metadata_error_is_not_found_matches_http_404_tokens() {
+        assert!(oauth_metadata_error_is_not_found("404 Not Found"));
+        assert!(oauth_metadata_error_is_not_found(
+            "failed to fetch metadata: HTTP 404"
+        ));
+        assert!(!oauth_metadata_error_is_not_found("429 Too Many Requests"));
+        assert!(!oauth_metadata_error_is_not_found(
+            "expected discovery request failure"
+        ));
     }
 
     #[tokio::test]

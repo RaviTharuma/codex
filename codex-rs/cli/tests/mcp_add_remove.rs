@@ -301,6 +301,94 @@ async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
 }
 
 #[tokio::test]
+async fn add_anonymous_streamable_http_hub_does_not_prompt_mcp_login() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/mcp"))
+        .respond_with(ResponseTemplate::new(405))
+        .mount(&server)
+        .await;
+    for well_known in [
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(well_known))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+    }
+
+    let url = format!("{}/mcp", server.uri());
+    let mut add = codex_command(codex_home.path())?;
+    add.env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .args(["mcp", "add", "anonymous-hub", "--url", &url]);
+    let add_output = tokio::task::spawn_blocking(move || add.output()).await??;
+    assert!(
+        add_output.status.success(),
+        "adding an anonymous streamable-http hub should succeed: {}",
+        String::from_utf8_lossy(&add_output.stderr)
+    );
+    let add_stdout = String::from_utf8(add_output.stdout)?;
+    assert!(add_stdout.contains("Added global MCP server 'anonymous-hub'."));
+    assert!(
+        !add_stdout.contains("codex mcp login"),
+        "404 well-known OAuth metadata must not nag login: {add_stdout}"
+    );
+    assert!(
+        !add_stdout.contains("may or may not require login"),
+        "404 well-known OAuth metadata must not be treated as unknown OAuth: {add_stdout}"
+    );
+
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let hub = servers
+        .get("anonymous-hub")
+        .expect("anonymous hub should be saved");
+    match &hub.transport {
+        McpServerTransportConfig::StreamableHttp {
+            url: saved_url,
+            bearer_token_env_var,
+            ..
+        } => {
+            assert_eq!(saved_url, &url);
+            assert!(bearer_token_env_var.is_none());
+        }
+        other => panic!("unexpected transport: {other:?}"),
+    }
+
+    let mut list = codex_command(codex_home.path())?;
+    list.env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .args([
+            "-c",
+            "mcp_oauth_credentials_store=\"file\"",
+            "mcp",
+            "list",
+            "--json",
+        ]);
+    let list_output = tokio::task::spawn_blocking(move || list.output()).await??;
+    assert!(
+        list_output.status.success(),
+        "listing an anonymous streamable-http hub should succeed: {}",
+        String::from_utf8_lossy(&list_output.stderr)
+    );
+    let entries: serde_json::Value = serde_json::from_slice(&list_output.stdout)?;
+    assert_eq!(entries[0]["name"], "anonymous-hub");
+    assert_eq!(
+        entries[0]["auth_status"],
+        "unsupported",
+        "anonymous hubs with 404 well-known OAuth metadata must not require login: {}",
+        String::from_utf8_lossy(&list_output.stdout)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn add_streamable_http_without_manual_token() -> Result<()> {
     let codex_home = TempDir::new()?;
 
