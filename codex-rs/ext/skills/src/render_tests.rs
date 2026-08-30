@@ -811,7 +811,7 @@ fn mixed_catalog_prefers_executor_inclusion_over_total_aliased_inclusion() {
         }
     );
     assert_eq!(orchestrator.report.total_count, 1);
-    assert_eq!(host.skill_root_lines, Vec::<String>::new());
+    assert_eq!(host.skill_root_lines, vec![format!("- `r0` = `{root}`")]);
 }
 
 #[tokio::test]

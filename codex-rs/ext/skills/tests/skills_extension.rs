@@ -373,7 +373,7 @@ async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -
     let mut outcome = SkillLoadOutcome::default();
     outcome.skills.push(SkillMetadata {
         name: "demo".to_string(),
-        description: "Demo skill.".to_string(),
+        description: "A description long enough that titles-only overflow still shortens it past the warning threshold while keeping the skill name visible.".repeat(4),
         short_description: None,
         interface: None,
         dependencies: None,
