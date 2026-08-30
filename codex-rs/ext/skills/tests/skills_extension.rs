@@ -1533,7 +1533,7 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
     assert_eq!(
         warning.message,
         format!(
-            "Exceeded skills context budget. All skill descriptions were removed and {omitted_count} additional skills were not included in the model-visible skills list."
+            "Exceeded skills context budget of 8000 characters. All skill descriptions were removed and {omitted_count} additional skills were not included in the model-visible skills list."
         )
     );
     assert!(event_rx.try_recv().is_err());
@@ -2629,6 +2629,7 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
     SkillsExtensionConfig {
         include_instructions: config.include_instructions,
         max_context_tokens: None,
+        listing_budget_fraction: 0.02,
         bundled_skills_enabled: config.bundled_skills_enabled,
         orchestrator_skills_enabled: config.orchestrator_skills_enabled,
         shadow_selection_enabled: config.shadow_selection_enabled,

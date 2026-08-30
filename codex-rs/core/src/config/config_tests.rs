@@ -393,11 +393,64 @@ enabled = false
             bundled: Some(BundledSkillsConfig { enabled: false }),
             include_instructions: Some(false),
             max_context_tokens: std::num::NonZeroUsize::new(1_200),
+            listing_budget_fraction: None,
             config: Vec::new(),
         })
     );
 
     assert!(toml::from_str::<ConfigToml>("[skills]\nmax_context_tokens = 0\n").is_err());
+}
+
+#[test]
+fn parses_skills_listing_budget_fraction() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[skills]
+listing_budget_fraction = 0.1
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.skills,
+        Some(SkillsConfig {
+            listing_budget_fraction: Some(0.1),
+            ..SkillsConfig::default()
+        })
+    );
+
+    for invalid in ["-0.1", "1.1", "nan", "inf"] {
+        let config = format!("[skills]\nlisting_budget_fraction = {invalid}\n");
+        assert!(
+            toml::from_str::<ConfigToml>(&config).is_err(),
+            "invalid listing budget fraction should be rejected: {invalid}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn load_config_resolves_skill_listing_budget_fraction() -> std::io::Result<()> {
+    let default_config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir()?.abs(),
+    )
+    .await?;
+    assert_eq!(
+        default_config.skill_listing_budget_fraction,
+        codex_config::DEFAULT_SKILL_LISTING_BUDGET_FRACTION
+    );
+
+    let config_toml = toml::from_str::<ConfigToml>("[skills]\nlisting_budget_fraction = 0.25\n")
+        .expect("listing budget fraction should deserialize");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        tempdir()?.abs(),
+    )
+    .await?;
+    assert_eq!(config.skill_listing_budget_fraction, 0.25);
+    Ok(())
 }
 
 #[test]

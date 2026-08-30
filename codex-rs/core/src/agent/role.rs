@@ -109,6 +109,7 @@ async fn apply_role_to_config_inner(
         skills.bundled = skills.bundled.filter(|bundled| !bundled.enabled);
         skills.include_instructions = skills.include_instructions.filter(|enabled| !enabled);
         skills.max_context_tokens = None;
+        skills.listing_budget_fraction = None;
         if !skills.config.is_empty()
             || skills.bundled.is_some()
             || skills.include_instructions.is_some()
