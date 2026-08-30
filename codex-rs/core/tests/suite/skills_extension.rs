@@ -419,18 +419,6 @@ fn metadata_cost(skill_lines: &[&str]) -> usize {
     })
 }
 
-fn executor_omission_text(developer_texts: &[String]) -> &str {
-    developer_texts
-        .iter()
-        .find(|text| text.contains("additional skills omitted from this bounded skills list"))
-        .map(String::as_str)
-        .unwrap_or_else(|| {
-            panic!(
-                "production request should include the executor omission marker, got {developer_texts:?}"
-            )
-        })
-}
-
 async fn rendered_catalogs(
     host_skills: &[(&str, &str)],
     executor_skills: &[(&str, &str)],
@@ -2491,9 +2479,7 @@ async fn production_turn_aliases_combined_skill_catalogs_under_shared_budget() -
 async fn production_turn_scales_extension_catalog_from_resolved_model_window() -> Result<()> {
     let skill_count = 800;
     let mut included_counts = Vec::new();
-    for (context_window, max_context_window, expected_budget) in
-        [(Some(10_000), None, 200), (None, Some(400_000), 8_000)]
-    {
+    for (context_window, max_context_window) in [(Some(10_000), None), (None, Some(400_000))] {
         let server = responses::start_mock_server().await;
         let response = mount_sse_once(
             &server,
@@ -2568,32 +2554,31 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
             .take_while(|line| !line.starts_with("### "))
             .filter(|line| line.starts_with("- "))
             .collect::<Vec<_>>();
-        let metadata_cost = metadata_lines.iter().fold(0usize, |cost, line| {
-            cost.saturating_add(approx_token_count(&format!("{line}\n")))
-        });
         let included_count = metadata_lines
             .iter()
             .filter(|line| line.starts_with("- skill-"))
             .count();
-        let warning = event_rx.try_recv()?.into_warning();
-        let omitted_count = skill_count - included_count;
+        let warning = event_rx.try_recv().ok().map(|event| event.into_warning());
 
-        assert!(catalog_text.contains("additional skills omitted"));
+        assert!(!catalog_text.contains("additional skills omitted"));
         assert!(!catalog_text.contains(
             "A description long enough to keep the catalog under sustained budget pressure."
         ));
-        assert!(metadata_cost <= expected_budget);
-        assert_eq!(
-            warning.message,
-            format!(
-                "Exceeded skills context budget. All skill descriptions were removed and {omitted_count} additional skills were not included in the model-visible skills list."
-            )
-        );
+        assert_eq!(included_count, skill_count);
+        if let Some(warning) = warning {
+            assert!(
+                !warning.message.contains(
+                    "additional skills were not included in the model-visible skills list."
+                ),
+                "titles-only overflow should keep every name visible: {}",
+                warning.message
+            );
+        }
         included_counts.push(included_count);
     }
 
-    assert!(included_counts[0] > 0);
-    assert!(included_counts[0] < included_counts[1]);
+    assert_eq!(included_counts[0], skill_count);
+    assert_eq!(included_counts[1], skill_count);
 
     Ok(())
 }
@@ -3316,23 +3301,18 @@ async fn production_turn_keeps_full_host_and_executor_catalogs_when_they_fit() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn production_turn_omits_host_skills_under_extreme_host_only_pressure() -> Result<()> {
+async fn production_turn_keeps_host_skill_names_under_extreme_host_only_pressure() -> Result<()> {
     let (developer_texts, warning_messages) =
         rendered_catalogs(&HOST_CATALOG, &[], HOST_OMITTING_CONTEXT_WINDOW).await?;
     let host_lines = skill_lines(catalog_text(&developer_texts, "host"), "host");
 
     assert_eq!(
         skill_names(&host_lines),
-        vec!["host-alpha", "host-beta", "host-delta"]
+        vec!["host-alpha", "host-beta", "host-delta", "host-gamma"]
     );
-    let expected_warning = "Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list.";
-    assert_eq!(
-        warning_messages
-            .iter()
-            .filter(|message| message.as_str() == expected_warning)
-            .count(),
-        1
-    );
+    assert!(warning_messages.iter().all(|message| {
+        !message.contains("additional skills were not included in the model-visible skills list.")
+    }));
 
     Ok(())
 }
@@ -3354,15 +3334,11 @@ async fn production_turn_preserves_empty_core_compatible_host_fragment() -> Resu
             )
         });
 
-    assert!(!host_fragment.contains(&format!("- {}:", host_skills[0].0)));
+    assert!(host_fragment.contains(&format!("- {}:", host_skills[0].0)));
     assert!(!host_fragment.contains("## Host skills update"));
-    assert_eq!(
-        warning_messages,
-        vec![
-            "Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
-                .to_string()
-        ]
-    );
+    assert!(warning_messages.iter().all(|message| {
+        !message.contains("additional skills were not included in the model-visible skills list.")
+    }));
 
     Ok(())
 }
@@ -3376,36 +3352,36 @@ async fn successive_turns_do_not_repeat_unchanged_host_budget_warning() -> Resul
         /*turn_count*/ 2,
     )
     .await?;
-    let expected_warning = "Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list.";
-
-    assert_eq!(
-        warning_messages
-            .iter()
-            .filter(|message| message.as_str() == expected_warning)
-            .count(),
-        1
-    );
+    assert!(warning_messages.iter().all(|message| {
+        !message.contains("additional skills were not included in the model-visible skills list.")
+    }));
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn production_turn_omits_executor_skills_under_extreme_executor_only_pressure() -> Result<()>
-{
+async fn production_turn_keeps_executor_skill_names_under_extreme_executor_only_pressure()
+-> Result<()> {
     let (developer_texts, _) =
         rendered_catalogs(&[], &EXECUTOR_CATALOG, EXECUTOR_OMITTING_CONTEXT_WINDOW).await?;
-    let executor_text = executor_omission_text(&developer_texts);
+    let executor_text = catalog_text(&developer_texts, "exec");
     let executor_lines = skill_lines(executor_text, "exec");
 
-    assert_eq!(skill_names(&executor_lines), vec!["exec-alpha"]);
-    assert!(executor_text.contains("- 5 additional skills omitted from this bounded skills list."));
+    assert_eq!(
+        skill_names(&executor_lines),
+        EXECUTOR_CATALOG
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+    );
+    assert!(!executor_text.contains("additional skills omitted"));
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn production_turn_omits_executor_skills_after_host_skills_under_extreme_pressure()
--> Result<()> {
+async fn production_turn_keeps_host_and_executor_names_under_extreme_mixed_pressure() -> Result<()>
+{
     let (developer_texts, _) = rendered_catalogs(
         &HOST_CATALOG,
         &EXECUTOR_CATALOG,
@@ -3416,13 +3392,25 @@ async fn production_turn_omits_executor_skills_after_host_skills_under_extreme_p
         .iter()
         .flat_map(|text| skill_lines(text, "host"))
         .collect::<Vec<_>>();
-    let executor_text = executor_omission_text(&developer_texts);
+    let executor_text = catalog_text(&developer_texts, "exec");
     let executor_lines = skill_lines(executor_text, "exec");
 
-    assert_eq!(skill_names(&host_lines), Vec::<&str>::new());
-    assert_eq!(skill_names(&executor_lines), vec!["exec-alpha"]);
-    assert!(executor_text.contains("- 5 additional skills omitted from this bounded skills list."));
-    assert!(developer_texts.iter().any(|text| text.contains(
+    assert_eq!(
+        skill_names(&host_lines),
+        HOST_CATALOG
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        skill_names(&executor_lines),
+        EXECUTOR_CATALOG
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+    );
+    assert!(!executor_text.contains("additional skills omitted"));
+    assert!(developer_texts.iter().all(|text| !text.contains(
         "Host skills are available but omitted from the model-visible skills list because the skills context budget was exceeded."
     )));
 
@@ -3443,7 +3431,10 @@ async fn production_turn_omits_host_skills_before_executor_skills_under_extreme_
 
     assert_eq!(
         skill_names(&host_lines),
-        vec!["host-alpha", "host-beta", "host-delta"]
+        HOST_CATALOG
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         skill_names(&executor_lines),
@@ -3452,10 +3443,9 @@ async fn production_turn_omits_host_skills_before_executor_skills_under_extreme_
             .map(|(name, _)| *name)
             .collect::<Vec<_>>()
     );
-    assert!(warning_messages.contains(
-        &"Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
-            .to_string()
-    ));
+    assert!(warning_messages.iter().all(|message| {
+        !message.contains("additional skills were not included in the model-visible skills list.")
+    }));
 
     Ok(())
 }
