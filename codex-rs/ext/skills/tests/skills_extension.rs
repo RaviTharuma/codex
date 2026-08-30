@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -225,6 +226,122 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
         .get::<InjectedHostSkillPrompts>()
         .ok_or("host skill prompt marker should be set")?;
     assert!(injected_host_skill_prompts.contains_path(&skill_path_string));
+
+    std::fs::remove_dir_all(codex_home)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_skill_invocation_resolves_budget_omitted_enabled_skills() -> TestResult {
+    let codex_home = test_codex_home();
+    let skills_root = codex_home.join("skills");
+    let long_description = "A description long enough to keep the catalog under sustained budget pressure so later names can be omitted from the implicit list.";
+    let mut outcome = SkillLoadOutcome::default();
+    let mut omitted_path = None;
+    let mut disabled_path = None;
+    let mut names = (0..40)
+        .map(|index| (format!("skill-{index:02}"), true))
+        .collect::<Vec<_>>();
+    names.push(("skill-omitted".to_string(), true));
+    names.push(("skill-disabled".to_string(), false));
+    for (name, _enabled) in names {
+        let skill_path = skills_root.join(name).join("SKILL.md");
+        std::fs::create_dir_all(
+            skill_path
+                .parent()
+                .ok_or("skill path should have a parent")?,
+        )?;
+        std::fs::write(
+            &skill_path,
+            format!("---\nname: {name}\ndescription: {long_description}\n---\n# {name}\n"),
+        )?;
+        let skill_path = AbsolutePathBuf::try_from(skill_path)?;
+        if name == "skill-omitted" {
+            omitted_path = Some(skill_path.clone());
+        }
+        if name == "skill-disabled" {
+            disabled_path = Some(skill_path.clone());
+        }
+        outcome.skills.push(SkillMetadata {
+            name: name.to_string(),
+            description: long_description.to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: skill_path,
+            scope: SkillScope::User,
+            plugin_id: None,
+            remote_plugin_id: None,
+        });
+    }
+    let omitted_path = omitted_path.ok_or("omitted skill path")?;
+    let disabled_path = disabled_path.ok_or("disabled skill path")?;
+    outcome.disabled_paths = HashSet::from([disabled_path.clone()]);
+
+    let mut builder = ExtensionRegistryBuilder::new();
+    install(&mut builder, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let session_source = SessionSource::Cli;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &default_config(),
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    let mut model_info = model_info_from_slug("test-model");
+    model_info.context_window = Some(1_000);
+    thread_store.insert(model_info);
+    let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert(HostSkillsSnapshot::new(Arc::new(outcome)));
+
+    let fragments = registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-1".to_string(),
+                user_input: vec![UserInput::Text {
+                    text: "$skill-omitted $skill-disabled".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                environments: Vec::new(),
+            },
+            /*extension_metrics*/ None,
+            &session_store,
+            &thread_store,
+            &turn_store,
+        )
+        .await;
+
+    let rendered = fragments
+        .iter()
+        .map(|fragment| fragment.render())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let omitted_path_string = omitted_path.to_string_lossy().replace('\\', "/");
+    assert!(
+        !rendered.contains("- skill-omitted:"),
+        "implicit catalog should omit the later skill under budget pressure: {rendered}"
+    );
+    assert!(
+        rendered.contains("<name>skill-omitted</name>"),
+        "explicit $skill should resolve an enabled skill even when the implicit catalog omitted it: {rendered}"
+    );
+    assert!(
+        rendered.contains(&format!("<path>{omitted_path_string}</path>")),
+        "explicit invocation should inject the omitted skill body: {rendered}"
+    );
+    assert!(
+        !rendered.contains("<name>skill-disabled</name>"),
+        "disabled skills must stay unresolved: {rendered}"
+    );
 
     std::fs::remove_dir_all(codex_home)?;
     Ok(())
