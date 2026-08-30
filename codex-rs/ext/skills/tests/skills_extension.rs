@@ -245,7 +245,7 @@ async fn explicit_skill_invocation_resolves_budget_omitted_enabled_skills() -> T
     names.push(("skill-omitted".to_string(), true));
     names.push(("skill-disabled".to_string(), false));
     for (name, _enabled) in names {
-        let skill_path = skills_root.join(name).join("SKILL.md");
+        let skill_path = skills_root.join(&name).join("SKILL.md");
         std::fs::create_dir_all(
             skill_path
                 .parent()
