@@ -11,8 +11,27 @@ use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;
 
+/// Default fraction of the model context window reserved for the available-skills catalog.
+pub const DEFAULT_SKILL_LISTING_BUDGET_FRACTION: f64 = 0.02;
+
 const fn default_enabled() -> bool {
     true
+}
+
+fn deserialize_listing_budget_fraction<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(fraction) = Option::<f64>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if (0.0..=1.0).contains(&fraction) && fraction.is_finite() {
+        Ok(Some(fraction))
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "listing_budget_fraction must be between 0.0 and 1.0 inclusive, got {fraction}"
+        )))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -27,7 +46,7 @@ pub struct SkillConfig {
     pub enabled: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SkillsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,6 +60,17 @@ pub struct SkillsConfig {
     /// the model context window and is capped at 10,000 tokens when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_tokens: Option<NonZeroUsize>,
+
+    /// Fraction of the model context window reserved for the available-skills
+    /// catalog when `max_context_tokens` is unset. Defaults to `0.02` (2%).
+    /// Must be between `0.0` and `1.0` inclusive.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_listing_budget_fraction"
+    )]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub listing_budget_fraction: Option<f64>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<SkillConfig>,

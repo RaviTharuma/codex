@@ -445,7 +445,7 @@ stream_max_retries = 0
     }
     if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
         let is_skills_budget_warning = |message: &str| {
-            message.starts_with("Exceeded skills context budget.")
+            message.starts_with("Exceeded skills context budget")
                 || message.starts_with(
                     "Skill descriptions were shortened to fit the skills context budget.",
                 )

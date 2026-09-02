@@ -2269,6 +2269,7 @@ async fn run_debug_prompt_input_command(
         codex_skills_extension::SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: config.bundled_skills_enabled(),
             orchestrator_skills_enabled: config.orchestrator_skills_enabled,
             shadow_selection_enabled: config

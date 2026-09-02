@@ -3584,6 +3584,13 @@
           "description": "Whether turns receive the automatic skills instructions block.",
           "type": "boolean"
         },
+        "listing_budget_fraction": {
+          "description": "Fraction of the model context window reserved for the available-skills catalog when `max_context_tokens` is unset. Defaults to `0.02` (2%). Must be between `0.0` and `1.0` inclusive.",
+          "format": "double",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
         "max_context_tokens": {
           "description": "Maximum tokens used by the available-skills catalog. Defaults to 2% of the model context window and is capped at 10,000 tokens when set.",
           "format": "uint",
