@@ -17,14 +17,13 @@ use crate::host_aliases::shared_host_alias_roots;
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 const MAX_CONFIGURED_SKILL_METADATA_TOKEN_BUDGET: usize = 10_000;
 const MAX_SKILL_PROMPT_BYTES: usize = 8_000;
-const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
+const DEFAULT_SKILL_LISTING_BUDGET_FRACTION: f64 = 0.02;
 const MAX_CATALOG_SKILL_DESCRIPTION_CHARS: usize = 1_024;
 const TRUNCATED_SKILL_DESCRIPTION_SUFFIX: &str = "...";
 const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 100;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 const SKILL_DESCRIPTION_TRUNCATED_WARNING: &str = "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
-const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
-    "Exceeded skills context budget. All skill descriptions were removed and";
+const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str = "Exceeded skills context budget of";
 pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
@@ -90,7 +89,7 @@ pub(crate) struct SkillRenderReport {
 }
 
 impl SkillRenderReport {
-    pub(crate) fn warning_message(&self) -> Option<String> {
+    pub(crate) fn warning_message(&self, budget_label: &str) -> Option<String> {
         if self.omitted_count > 0 {
             let skill_word = if self.omitted_count == 1 {
                 "skill"
@@ -103,8 +102,8 @@ impl SkillRenderReport {
                 "were"
             };
             return Some(format!(
-                "{} {} additional {} {} not included in the model-visible skills list.",
-                SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX, self.omitted_count, skill_word, verb
+                "{SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX} {budget_label}. All skill descriptions were removed and {} additional {skill_word} {verb} not included in the model-visible skills list.",
+                self.omitted_count
             ));
         }
 
@@ -124,32 +123,56 @@ impl SkillRenderReport {
     }
 }
 
-pub(crate) fn skill_metadata_budget(
+pub(crate) struct SkillMetadataBudgetSelection {
+    pub budget: SkillMetadataBudget,
+    pub warning_label: String,
+}
+
+pub(crate) fn skill_metadata_budget_selection(
     context_window: Option<i64>,
     max_context_tokens: Option<NonZeroUsize>,
-) -> SkillMetadataBudget {
+    listing_budget_fraction: f64,
+) -> SkillMetadataBudgetSelection {
     if let Some(max_context_tokens) = max_context_tokens {
-        return SkillMetadataBudget::Tokens(
-            max_context_tokens
-                .get()
-                .min(MAX_CONFIGURED_SKILL_METADATA_TOKEN_BUDGET),
-        );
+        let tokens = max_context_tokens
+            .get()
+            .min(MAX_CONFIGURED_SKILL_METADATA_TOKEN_BUDGET);
+        return SkillMetadataBudgetSelection {
+            budget: SkillMetadataBudget::Tokens(tokens),
+            warning_label: format!("{tokens} tokens"),
+        };
     }
+
+    let listing_budget_fraction = if listing_budget_fraction.is_finite() {
+        listing_budget_fraction.clamp(0.0, 1.0)
+    } else {
+        DEFAULT_SKILL_LISTING_BUDGET_FRACTION
+    };
 
     context_window
         .and_then(|window| usize::try_from(window).ok())
         .filter(|window| *window > 0)
         .map(|window| {
-            SkillMetadataBudget::Tokens(
-                window
-                    .saturating_mul(SKILL_METADATA_CONTEXT_WINDOW_PERCENT)
-                    .saturating_div(100)
-                    .max(1),
-            )
+            let tokens = ((window as f64) * listing_budget_fraction).floor().max(1.0) as usize;
+            SkillMetadataBudgetSelection {
+                budget: SkillMetadataBudget::Tokens(tokens),
+                warning_label: format_listing_budget_percent(listing_budget_fraction),
+            }
         })
-        .unwrap_or(SkillMetadataBudget::Characters(
-            DEFAULT_SKILL_METADATA_CHAR_BUDGET,
-        ))
+        .unwrap_or(SkillMetadataBudgetSelection {
+            budget: SkillMetadataBudget::Characters(DEFAULT_SKILL_METADATA_CHAR_BUDGET),
+            warning_label: format!("{DEFAULT_SKILL_METADATA_CHAR_BUDGET} characters"),
+        })
+}
+
+fn format_listing_budget_percent(fraction: f64) -> String {
+    let percent = fraction * 100.0;
+    if (percent - percent.round()).abs() < 1e-9 {
+        format!("{}%", percent.round() as i64)
+    } else {
+        let formatted = format!("{percent:.6}");
+        format!("{}%", formatted.trim_end_matches('0').trim_end_matches('.'))
+    }
 }
 
 fn metadata_line_cost(budget: SkillMetadataBudget, line: &str) -> usize {

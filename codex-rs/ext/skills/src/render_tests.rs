@@ -194,27 +194,56 @@ fn description_selection_follows_render_policy() {
 #[test]
 fn catalog_budget_uses_context_percentage_or_character_fallback() {
     assert_eq!(
-        skill_metadata_budget(Some(100_000), /*max_context_tokens*/ None),
+        skill_metadata_budget_selection(
+            Some(100_000),
+            /*max_context_tokens*/ None,
+            DEFAULT_SKILL_LISTING_BUDGET_FRACTION
+        )
+        .budget,
         SkillMetadataBudget::Tokens(2_000)
     );
     assert_eq!(
-        skill_metadata_budget(Some(400_000), /*max_context_tokens*/ None),
+        skill_metadata_budget_selection(
+            Some(400_000),
+            /*max_context_tokens*/ None,
+            DEFAULT_SKILL_LISTING_BUDGET_FRACTION
+        )
+        .budget,
         SkillMetadataBudget::Tokens(8_000)
     );
     assert_eq!(
-        skill_metadata_budget(
-            /*context_window*/ None, /*max_context_tokens*/ None
-        ),
+        skill_metadata_budget_selection(
+            /*context_window*/ None,
+            /*max_context_tokens*/ None,
+            DEFAULT_SKILL_LISTING_BUDGET_FRACTION
+        )
+        .budget,
         SkillMetadataBudget::Characters(8_000)
     );
     assert_eq!(
-        skill_metadata_budget(Some(100_000), NonZeroUsize::new(5_000)),
+        skill_metadata_budget_selection(Some(100_000), NonZeroUsize::new(5_000), 0.5).budget,
         SkillMetadataBudget::Tokens(5_000)
     );
     assert_eq!(
-        skill_metadata_budget(/*context_window*/ None, NonZeroUsize::new(50_000)),
+        skill_metadata_budget_selection(
+            /*context_window*/ None,
+            NonZeroUsize::new(50_000),
+            DEFAULT_SKILL_LISTING_BUDGET_FRACTION
+        )
+        .budget,
         SkillMetadataBudget::Tokens(10_000)
     );
+    assert_eq!(
+        skill_metadata_budget_selection(Some(100_000), /*max_context_tokens*/ None, 0.1).budget,
+        SkillMetadataBudget::Tokens(10_000)
+    );
+    let custom =
+        skill_metadata_budget_selection(Some(100_000), /*max_context_tokens*/ None, 0.1);
+    assert_eq!(custom.budget, SkillMetadataBudget::Tokens(10_000));
+    assert_eq!(custom.warning_label, "10%");
+    let absolute = skill_metadata_budget_selection(Some(100_000), NonZeroUsize::new(5_000), 0.5);
+    assert_eq!(absolute.budget, SkillMetadataBudget::Tokens(5_000));
+    assert_eq!(absolute.warning_label, "5000 tokens");
 }
 
 #[test]
@@ -1093,7 +1122,7 @@ fn substantial_description_shortening_emits_warning() {
     .expect("catalog should render");
 
     assert_eq!(
-        render.report.warning_message(),
+        render.report.warning_message("2%"),
         Some(
             "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
                 .to_string()
@@ -1110,14 +1139,14 @@ fn substantial_description_shortening_warning_starts_above_threshold() {
         truncated_description_chars: 200,
         truncated_description_count: 2,
     };
-    assert_eq!(report_at_threshold.warning_message(), None);
+    assert_eq!(report_at_threshold.warning_message("2%"), None);
 
     let report_above_threshold = SkillRenderReport {
         truncated_description_chars: 201,
         ..report_at_threshold
     };
     assert_eq!(
-        report_above_threshold.warning_message(),
+        report_above_threshold.warning_message("2%"),
         Some(SKILL_DESCRIPTION_TRUNCATED_WARNING.to_string())
     );
 }

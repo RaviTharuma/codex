@@ -89,7 +89,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                     &catalog
                         .entries
                         .iter()
-                        .filter(|entry| entry.is_model_visible())
+                        .filter(|entry| entry.enabled)
                         .collect::<Vec<_>>(),
                 );
                 if let Some(entry) = catalog.entries.into_iter().find(|entry| {

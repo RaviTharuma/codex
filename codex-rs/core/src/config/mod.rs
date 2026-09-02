@@ -700,6 +700,10 @@ pub struct Config {
     /// Optional token budget override for the available-skills catalog.
     pub skill_max_context_tokens: Option<NonZeroUsize>,
 
+    /// Fraction of the model context window reserved for the available-skills
+    /// catalog when `skill_max_context_tokens` is unset.
+    pub skill_listing_budget_fraction: f64,
+
     /// Whether orchestrator-owned skills are exposed to the model.
     pub orchestrator_skills_enabled: bool,
 
@@ -3910,6 +3914,11 @@ impl Config {
             .skills
             .as_ref()
             .and_then(|skills| skills.max_context_tokens);
+        let skill_listing_budget_fraction = cfg
+            .skills
+            .as_ref()
+            .and_then(|skills| skills.listing_budget_fraction)
+            .unwrap_or(codex_config::DEFAULT_SKILL_LISTING_BUDGET_FRACTION);
         let include_environment_context = cfg.include_environment_context.unwrap_or(true);
         let guardian_policy_config =
             guardian_policy_config_from_requirements(config_layer_stack.requirements_toml())
@@ -4170,6 +4179,7 @@ impl Config {
             include_collaboration_mode_instructions,
             include_skill_instructions,
             skill_max_context_tokens,
+            skill_listing_budget_fraction,
             orchestrator_skills_enabled,
             orchestrator_mcp_enabled,
             include_environment_context,

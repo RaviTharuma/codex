@@ -54,7 +54,7 @@ use crate::render::SkillCatalogRenderPolicy;
 use crate::render::SkillMetadataBudget;
 use crate::render::SkillRenderReport;
 use crate::render::render_available_skills;
-use crate::render::skill_metadata_budget;
+use crate::render::skill_metadata_budget_selection;
 use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::render_observability::CatalogSurface;
@@ -96,12 +96,14 @@ fn render_catalog(
     include_skills_usage_instructions: bool,
     policy: SkillCatalogRenderPolicy,
     budget: SkillMetadataBudget,
+    budget_label: &str,
 ) -> RenderedCatalog {
     render_prepared_catalog(
         extension_metrics,
         catalog_surface,
         include_skills_usage_instructions,
         budget,
+        budget_label,
         render_available_skills(catalog, policy, budget, include_skills_usage_instructions),
     )
 }
@@ -111,6 +113,7 @@ fn render_prepared_catalog(
     catalog_surface: CatalogSurface,
     include_skills_usage_instructions: bool,
     budget: SkillMetadataBudget,
+    budget_label: &str,
     rendered: Option<AvailableSkillsRender>,
 ) -> RenderedCatalog {
     let Some(rendered) = rendered else {
@@ -123,7 +126,7 @@ fn render_prepared_catalog(
         return RenderedCatalog::default();
     };
     record_catalog_render(extension_metrics, catalog_surface, budget, &rendered.report);
-    let warning_message = rendered.report.warning_message();
+    let warning_message = rendered.report.warning_message(budget_label);
     let fragment = rendered.into_fragment(include_skills_usage_instructions);
     RenderedCatalog {
         fragment,
@@ -225,13 +228,19 @@ where
             let extension_metrics = session_store
                 .get::<SkillsSessionState>()
                 .and_then(|state| state.extension_metrics.clone());
+            let budget = skill_metadata_budget_selection(
+                /*context_window*/ None,
+                config.max_context_tokens,
+                config.listing_budget_fraction,
+            );
             let rendered = render_catalog(
                 extension_metrics.as_deref(),
                 CatalogSurface::ThreadContext,
                 &catalog,
                 include_usage,
                 SkillCatalogRenderPolicy::ExtensionCompatible,
-                skill_metadata_budget(/*context_window*/ None, config.max_context_tokens),
+                budget.budget,
+                &budget.warning_label,
             );
             if let Some(message) = rendered.warning_message {
                 self.emit_warning(thread_store.level_id(), /*turn_id*/ None, message);
@@ -432,15 +441,19 @@ where
                 let context_window = model_info
                     .as_deref()
                     .and_then(ModelInfo::resolved_context_window);
-                let metadata_budget =
-                    skill_metadata_budget(context_window, config.max_context_tokens);
+                let metadata_budget = skill_metadata_budget_selection(
+                    context_window,
+                    config.max_context_tokens,
+                    config.listing_budget_fraction,
+                );
                 let rendered = render_catalog(
                     extension_metrics.as_deref(),
                     CatalogSurface::TurnInput,
                     &turn_catalog,
                     include_usage,
                     SkillCatalogRenderPolicy::ExtensionCompatible,
-                    metadata_budget,
+                    metadata_budget.budget,
+                    &metadata_budget.warning_label,
                 );
                 if let Some(message) = rendered.warning_message {
                     self.emit_warning(thread_store.level_id(), Some(&input.turn_id), message);

@@ -293,6 +293,7 @@ fn catalog_extensions(
         SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -558,6 +559,7 @@ async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() 
     install(&mut extensions, |config: &Config| SkillsExtensionConfig {
         include_instructions: config.include_skill_instructions,
         max_context_tokens: config.skill_max_context_tokens,
+        listing_budget_fraction: config.skill_listing_budget_fraction,
         bundled_skills_enabled: config.bundled_skills_enabled(),
         orchestrator_skills_enabled: config.orchestrator_skills_enabled,
         shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
@@ -975,6 +977,7 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: true,
             shadow_selection_enabled: false,
@@ -1339,6 +1342,7 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: true,
             shadow_selection_enabled: false,
@@ -1519,6 +1523,7 @@ async fn opted_in_executor_provider_skips_host_discovery_but_injects_discovered_
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -1745,6 +1750,7 @@ async fn executor_only_provider_preserves_structured_repo_skill_without_discover
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -1889,6 +1895,7 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -2191,6 +2198,7 @@ async fn explicit_executor_skill_prompt_rejects_oversized_resource() -> Result<(
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -2421,6 +2429,7 @@ async fn production_turn_aliases_combined_skill_catalogs_under_shared_budget() -
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: true,
             shadow_selection_enabled: false,
@@ -2520,6 +2529,7 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
             |config: &Config| SkillsExtensionConfig {
                 include_instructions: config.include_skill_instructions,
                 max_context_tokens: config.skill_max_context_tokens,
+                listing_budget_fraction: config.skill_listing_budget_fraction,
                 bundled_skills_enabled: false,
                 orchestrator_skills_enabled: false,
                 shadow_selection_enabled: false,
@@ -2668,6 +2678,52 @@ async fn production_turn_uses_configured_skill_catalog_token_budget() -> Result<
     assert_full_descriptions(&host_lines, &HOST_CATALOG);
     assert_full_descriptions(&executor_lines, &EXECUTOR_CATALOG);
     assert!(metadata_cost(&combined_lines) <= 800);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_uses_configured_skill_listing_budget_fraction() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[skills]\nlisting_budget_fraction = 0.1\n",
+    )?;
+    write_host_skills(codex_home.path(), &HOST_CATALOG)?;
+    let (extensions, _event_rx) = catalog_extensions(
+        executor_catalog(&EXECUTOR_CATALOG),
+        /*include_host_provider*/ true,
+    );
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_extensions(extensions)
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.context_window = Some(SHORTENING_CONTEXT_WINDOW);
+            model_info.max_context_window = None;
+        })
+        .with_config(configure_catalog_test);
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_turn("Inspect the available skills.").await?;
+    let request = response.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    let host_lines = skill_lines(catalog_text(&developer_texts, "host"), "host");
+    let executor_lines = skill_lines(catalog_text(&developer_texts, "exec"), "exec");
+    let combined_lines = host_lines
+        .iter()
+        .chain(executor_lines.iter())
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert_full_descriptions(&host_lines, &HOST_CATALOG);
+    assert_full_descriptions(&executor_lines, &EXECUTOR_CATALOG);
+    assert!(metadata_cost(&combined_lines) <= 1_200);
 
     Ok(())
 }
@@ -2839,6 +2895,7 @@ async fn production_turn_uses_provider_host_catalog_and_core_snapshot_injection(
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -2959,6 +3016,7 @@ async fn production_turn_suppresses_only_the_superseded_host_skill_prompt() -> R
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -3221,6 +3279,7 @@ async fn production_turn_keeps_orchestrator_world_state_incremental_across_turns
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: config.orchestrator_skills_enabled,
             shadow_selection_enabled: false,
@@ -3492,6 +3551,7 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,

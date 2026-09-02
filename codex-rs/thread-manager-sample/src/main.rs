@@ -216,6 +216,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         include_collaboration_mode_instructions: false,
         include_skill_instructions: false,
         skill_max_context_tokens: None,
+        skill_listing_budget_fraction: 0.02,
         orchestrator_skills_enabled: false,
         orchestrator_mcp_enabled: false,
         include_environment_context: false,
