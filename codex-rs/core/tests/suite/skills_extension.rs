@@ -1907,6 +1907,7 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -2209,6 +2210,7 @@ async fn explicit_executor_skill_prompt_rejects_oversized_resource() -> Result<(
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
+            listing_budget_fraction: config.skill_listing_budget_fraction,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
