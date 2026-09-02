@@ -373,18 +373,12 @@ fn allocate_skill_lines(
         .collect();
     }
 
-    let mut used = 0usize;
+    // Titles-only overflow: keep every enabled skill name visible even when the
+    // name-only listing exceeds the metadata budget. Never drop names after
+    // stripping descriptions.
     skill_lines
         .iter()
-        .map(|line| {
-            let next_used = used.saturating_add(line.minimum_cost(budget));
-            if next_used <= budget.limit() {
-                used = next_used;
-                SkillLineAllocation::DescriptionChars(0)
-            } else {
-                SkillLineAllocation::Omitted
-            }
-        })
+        .map(|_| SkillLineAllocation::DescriptionChars(0))
         .collect()
 }
 

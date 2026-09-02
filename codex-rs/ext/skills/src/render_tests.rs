@@ -579,7 +579,7 @@ fn mixed_catalogs_keep_absolute_authority_aware_rendering_under_budget_pressure(
 }
 
 #[test]
-fn mixed_catalog_reserves_executor_omission_marker_by_omitting_host_first() {
+fn mixed_catalog_keeps_titles_only_names_under_budget_pressure() {
     let host_catalog = SkillCatalog {
         entries: vec![entry_with_path(
             "h", "", /*short_description*/ None, "/h",
@@ -621,8 +621,8 @@ fn mixed_catalog_reserves_executor_omission_marker_by_omitting_host_first() {
         host.report,
         SkillRenderReport {
             total_count: 1,
-            included_count: 0,
-            omitted_count: 1,
+            included_count: 1,
+            omitted_count: 0,
             truncated_description_chars: 0,
             truncated_description_count: 0,
         }
@@ -631,22 +631,33 @@ fn mixed_catalog_reserves_executor_omission_marker_by_omitting_host_first() {
         executor.report,
         SkillRenderReport {
             total_count: 2,
-            included_count: 1,
-            omitted_count: 1,
+            included_count: 2,
+            omitted_count: 0,
             truncated_description_chars: 0,
             truncated_description_count: 0,
         }
     );
-    assert_eq!(
-        executor.skill_lines,
-        vec![
-            "- e1: (executor package: skill://executor/one)".to_string(),
-            "- 1 additional skill omitted from this bounded skills list.".to_string(),
-        ]
+    assert!(
+        executor
+            .skill_lines
+            .iter()
+            .any(|line| line.starts_with("- e1:"))
+    );
+    assert!(
+        executor
+            .skill_lines
+            .iter()
+            .any(|line| line.starts_with("- e2:"))
+    );
+    assert!(
+        executor
+            .skill_lines
+            .iter()
+            .all(|line| !line.contains("additional skill omitted"))
     );
     assert!(
         host.into_fragment(/*include_skills_usage_instructions*/ false)
-            .is_none()
+            .is_some()
     );
 }
 
@@ -822,14 +833,14 @@ fn mixed_catalog_prefers_executor_inclusion_over_total_aliased_inclusion() {
         host.report,
         SkillRenderReport {
             total_count: 2,
-            included_count: 0,
-            omitted_count: 2,
+            included_count: 2,
+            omitted_count: 0,
             truncated_description_chars: 0,
             truncated_description_count: 0,
         }
     );
     assert_eq!(orchestrator.report.total_count, 1);
-    assert_eq!(host.skill_root_lines, Vec::<String>::new());
+    assert_eq!(host.skill_root_lines, vec![format!("- `r0` = `{root}`")]);
 }
 
 #[tokio::test]
@@ -935,16 +946,19 @@ fn omission_notice_follows_render_policy_and_is_charged_to_catalog_budget() {
         SkillMetadataBudget::Tokens(100),
     )
     .expect("catalog should render");
-    let rendered_metadata_cost = fragment
-        .body()
-        .lines()
-        .filter(|line| line.starts_with("- "))
-        .map(|line| approx_token_count(&format!("{line}\n")))
-        .sum::<usize>();
-
     assert!(!core_fragment.body().contains("additional skills omitted"));
-    assert!(fragment.body().contains("additional skills omitted"));
-    assert!(rendered_metadata_cost <= 100);
+    assert!(!fragment.body().contains("additional skills omitted"));
+    for index in 0..20 {
+        let name = format!("- skill-{index:02}:");
+        assert!(
+            core_fragment.body().contains(&name),
+            "core-compatible titles-only list should keep {name}"
+        );
+        assert!(
+            fragment.body().contains(&name),
+            "extension-compatible titles-only list should keep {name}"
+        );
+    }
 }
 
 #[test]
@@ -1019,32 +1033,27 @@ fn catalog_report_counts_partial_description_truncation() {
 }
 
 #[test]
-fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() {
-    let oversized = entry(
-        "oversized",
-        &"x".repeat(MAX_CATALOG_SKILL_DESCRIPTION_CHARS),
-        /*short_description*/ None,
-    )
-    .with_display_path(format!("skill://{}", "x".repeat(512)));
+fn titles_only_keeps_every_enabled_skill_name_when_minimum_lines_exceed_budget() {
     let catalog = SkillCatalog {
-        entries: vec![oversized],
+        entries: (0..139)
+            .map(|index| {
+                entry(
+                    &format!("skill-{index:03}"),
+                    &"x".repeat(MAX_CATALOG_SKILL_DESCRIPTION_CHARS),
+                    /*short_description*/ None,
+                )
+            })
+            .collect(),
         warnings: Vec::new(),
     };
 
     let expected_report = SkillRenderReport {
-        total_count: 1,
-        included_count: 0,
-        omitted_count: 1,
-        truncated_description_chars: MAX_CATALOG_SKILL_DESCRIPTION_CHARS,
-        truncated_description_count: 1,
+        total_count: 139,
+        included_count: 139,
+        omitted_count: 0,
+        truncated_description_chars: MAX_CATALOG_SKILL_DESCRIPTION_CHARS.saturating_mul(139),
+        truncated_description_count: 139,
     };
-    assert_eq!(
-        expected_report.warning_message("2%"),
-        Some(
-            "Exceeded skills context budget of 2%. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
-                .to_string()
-        )
-    );
     let core_render = render_available_skills(
         &catalog,
         SkillCatalogRenderPolicy::CoreCompatible,
@@ -1055,42 +1064,7 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
     assert_eq!(core_render.report, expected_report);
     let core_fragment = core_render
         .into_fragment(/*include_skills_usage_instructions*/ false)
-        .expect("core-compatible rendering should preserve an empty skills fragment");
-    assert!(core_fragment.body().contains("## Skills"));
-    assert!(!core_fragment.body().contains("- oversized:"));
-    let render = render_available_skills(
-        &catalog,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
-        SkillMetadataBudget::Tokens(100),
-        /*include_skills_usage_instructions*/ false,
-    )
-    .expect("catalog should render");
-    assert_eq!(render.report, expected_report);
-    let fragment = render
-        .into_fragment(/*include_skills_usage_instructions*/ false)
-        .expect("omission marker should fit");
-
-    assert!(!fragment.body().contains("- oversized:"));
-    assert!(
-        fragment
-            .body()
-            .contains("- 1 additional skill omitted from this bounded skills list.")
-    );
-}
-
-#[test]
-fn catalog_preserves_report_when_no_fragment_fits_budget() {
-    let oversized = entry(
-        "oversized",
-        &"x".repeat(MAX_CATALOG_SKILL_DESCRIPTION_CHARS),
-        /*short_description*/ None,
-    )
-    .with_display_path(format!("skill://{}", "x".repeat(512)));
-    let catalog = SkillCatalog {
-        entries: vec![oversized],
-        warnings: Vec::new(),
-    };
-
+        .expect("titles-only names should remain model-visible");
     let render = render_available_skills(
         &catalog,
         SkillCatalogRenderPolicy::ExtensionCompatible,
@@ -1098,21 +1072,24 @@ fn catalog_preserves_report_when_no_fragment_fits_budget() {
         /*include_skills_usage_instructions*/ false,
     )
     .expect("catalog should produce a report");
-    assert_eq!(
-        render.report,
-        SkillRenderReport {
-            total_count: 1,
-            included_count: 0,
-            omitted_count: 1,
-            truncated_description_chars: MAX_CATALOG_SKILL_DESCRIPTION_CHARS,
-            truncated_description_count: 1,
-        }
-    );
-    assert!(
-        render
-            .into_fragment(/*include_skills_usage_instructions*/ false)
-            .is_none()
-    );
+    assert_eq!(render.report, expected_report);
+    let fragment = render
+        .into_fragment(/*include_skills_usage_instructions*/ false)
+        .expect("titles-only names should remain model-visible");
+
+    for index in 0..139 {
+        let name = format!("- skill-{index:03}:");
+        assert!(
+            core_fragment.body().contains(&name),
+            "core-compatible titles-only list should keep {name}"
+        );
+        assert!(
+            fragment.body().contains(&name),
+            "extension-compatible titles-only list should keep {name}"
+        );
+    }
+    assert!(!core_fragment.body().contains("additional skills omitted"));
+    assert!(!fragment.body().contains("additional skills omitted"));
 }
 
 #[test]

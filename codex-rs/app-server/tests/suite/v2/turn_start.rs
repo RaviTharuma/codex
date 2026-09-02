@@ -792,7 +792,7 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     assert_eq!(warning.thread_id.as_deref(), Some(thread.id.as_str()));
     assert_eq!(
         warning.message,
-        "Exceeded skills context budget of 2%. All skill descriptions were removed and 7 additional skills were not included in the model-visible skills list."
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
     );
 
     timeout(
@@ -813,8 +813,8 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
         "expected outgoing request to include the skills section"
     );
     assert!(
-        !body_contains(request, "- alpha-skill:") && !body_contains(request, "- beta-skill:"),
-        "expected trimmed skills to be omitted from the outgoing request body"
+        body_contains(request, "- alpha-skill:") && body_contains(request, "- beta-skill:"),
+        "expected titles-only overflow to keep every skill name visible"
     );
 
     Ok(())

@@ -490,7 +490,7 @@ async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -
     let mut outcome = SkillLoadOutcome::default();
     outcome.skills.push(SkillMetadata {
         name: "demo".to_string(),
-        description: "Demo skill.".to_string(),
+        description: "A description long enough that titles-only overflow still shortens it past the warning threshold while keeping the skill name visible.".repeat(4),
         short_description: None,
         interface: None,
         dependencies: None,
@@ -1541,7 +1541,7 @@ async fn moderate_budget_pressure_keeps_every_catalog_entry() -> TestResult {
 }
 
 #[tokio::test]
-async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() -> TestResult {
+async fn extreme_budget_pressure_keeps_titles_only_for_every_enabled_skill() -> TestResult {
     let executor_entries = (0..40)
         .map(|index| {
             let package_id = format!("executor/executor-skill-{index:03}");
@@ -1622,8 +1622,7 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
         .filter(|line| line.starts_with("- orchestrator-skill-"))
         .count();
     assert_eq!(40, included_executor_count);
-    assert!(included_orchestrator_count > 0);
-    assert!(included_orchestrator_count < 160);
+    assert_eq!(160, included_orchestrator_count);
     assert!(
         executor
             .body()
@@ -1634,26 +1633,27 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
             .body()
             .contains("- orchestrator-skill-000: (orchestrator package:")
     );
-    assert!(!orchestrator.body().contains("- orchestrator-skill-159:"));
-    for rendered in [executor.body(), orchestrator.body()] {
-        assert!(!rendered.contains("description-"));
-    }
     assert!(
         orchestrator
             .body()
-            .contains("additional skills omitted from this bounded skills list")
+            .contains("- orchestrator-skill-159: (orchestrator package:")
     );
-    let omitted_count = 200 - included_executor_count - included_orchestrator_count;
-    let warning = event_rx.try_recv()?.into_warning();
-    assert_eq!(warning.thread_id, "thread");
-    assert_eq!(warning.turn_id.as_deref(), Some("turn-1"));
-    assert_eq!(
-        warning.message,
-        format!(
-            "Exceeded skills context budget of 8000 characters. All skill descriptions were removed and {omitted_count} additional skills were not included in the model-visible skills list."
-        )
-    );
-    assert!(event_rx.try_recv().is_err());
+    for rendered in [executor.body(), orchestrator.body()] {
+        assert!(!rendered.contains("description-"));
+        assert!(!rendered.contains("additional skills omitted from this bounded skills list"));
+    }
+    for warning in event_rx.try_iter() {
+        let warning = warning.into_warning();
+        assert_eq!(warning.thread_id, "thread");
+        assert_eq!(warning.turn_id.as_deref(), Some("turn-1"));
+        assert!(
+            !warning
+                .message
+                .contains("additional skills were not included in the model-visible skills list."),
+            "titles-only overflow should keep every name visible: {}",
+            warning.message
+        );
+    }
 
     Ok(())
 }
@@ -2248,32 +2248,37 @@ async fn model_context_window_scales_executor_and_orchestrator_catalogs() -> Tes
     let executor_fragment = executor_section
         .render_diff(PreviousWorldStateSection::Absent)
         .ok_or("bounded executor catalog should render")?;
-    assert!(!executor_fragment.body().contains("skill-39"));
+    assert!(executor_fragment.body().contains("skill-39"));
+    assert!(executor_fragment.body().contains("skill-199"));
     let orchestrator_fragment = world_state_section(&sections, "orchestrator_skills")
         .render_diff(PreviousWorldStateSection::Absent)
         .ok_or("bounded orchestrator catalog should render")?;
     assert!(
-        orchestrator_fragment
+        !orchestrator_fragment
             .body()
             .contains("additional skills omitted")
     );
+    for index in 0..40 {
+        assert!(
+            orchestrator_fragment
+                .body()
+                .contains(&format!("- skill-{index:02}:")),
+            "titles-only orchestrator catalog should keep skill-{index:02}"
+        );
+    }
     let warnings = event_rx
         .try_iter()
         .map(CapturedExtensionEvent::into_warning)
         .collect::<Vec<_>>();
-    assert_eq!(warnings.len(), 2);
     for warning in warnings {
         assert_eq!(warning.thread_id, thread_store.level_id());
         assert_eq!(warning.turn_id.as_deref(), Some("turn-1"));
         assert!(
-            warning
+            !warning
                 .message
-                .starts_with("Exceeded skills context budget of")
-        );
-        assert!(
-            warning
-                .message
-                .ends_with("additional skills were not included in the model-visible skills list.")
+                .contains("additional skills were not included in the model-visible skills list."),
+            "titles-only overflow should keep every name visible: {}",
+            warning.message
         );
     }
     assert!(
