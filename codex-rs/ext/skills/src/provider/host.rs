@@ -141,6 +141,7 @@ fn catalog_entry_from_skill(skill: &SkillMetadata, enabled: bool) -> SkillCatalo
     .with_prompt_scope(skill.scope)
     .with_dependencies(skill.dependencies.clone());
 
+    entry.plugin_id = skill.plugin_id.clone();
     if !enabled {
         entry = entry.disabled();
     }

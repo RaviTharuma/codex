@@ -2992,6 +2992,15 @@
           "default": true,
           "type": "boolean"
         },
+        "inject": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PluginSkillInject"
+            }
+          ],
+          "default": "always",
+          "description": "Controls whether this plugin's skills are injected into every session."
+        },
         "mcp_servers": {
           "additionalProperties": {
             "$ref": "#/definitions/PluginMcpServerConfig"
@@ -3042,6 +3051,25 @@
         }
       },
       "type": "object"
+    },
+    "PluginSkillInject": {
+      "description": "When plugin skill metadata is injected into the model-visible catalog.",
+      "oneOf": [
+        {
+          "description": "Inject full skill metadata whenever the plugin is enabled.",
+          "enum": [
+            "always"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Keep the plugin installed and invokable, but do not inject its skill descriptions into every session. A compact name list is shown instead.",
+          "enum": [
+            "on_demand"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ProfileTui": {
       "additionalProperties": false,

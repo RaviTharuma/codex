@@ -3111,7 +3111,7 @@ fn loaded_plugins_cache_evicts_least_recently_used_configuration() {
                 format!("plugin-{index}@test"),
                 PluginConfig {
                     enabled: true,
-                    mcp_servers: HashMap::new(),
+                    ..PluginConfig::default()
                 },
             )]),
             skill_config_rules: SkillConfigRules::default(),

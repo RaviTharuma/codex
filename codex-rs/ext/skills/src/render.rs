@@ -175,6 +175,24 @@ fn format_listing_budget_percent(fraction: f64) -> String {
     }
 }
 
+fn compact_on_demand_plugin_line(catalog: &SkillCatalog) -> Option<String> {
+    let mut names = catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.enabled && !entry.prompt_visible && entry.plugin_id.is_some())
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        return None;
+    }
+    names.sort_unstable();
+    names.dedup();
+    Some(format!(
+        "- on-demand plugins (invoke with $name): {}",
+        names.join(", ")
+    ))
+}
+
 fn metadata_line_cost(budget: SkillMetadataBudget, line: &str) -> usize {
     let line = format!("{line}\n");
     match budget {
@@ -519,7 +537,14 @@ pub(crate) fn render_available_skills(
         .collect::<Vec<_>>();
     policy.order_entries(&mut entries);
     if entries.is_empty() {
-        return None;
+        let manifest = compact_on_demand_plugin_line(catalog)?;
+        return Some(AvailableSkillsRender {
+            prompt_kind: SkillPromptKind::Unaliased,
+            skill_root_lines: Vec::new(),
+            skill_lines: vec![manifest],
+            preserve_empty_fragment: policy == SkillCatalogRenderPolicy::CoreCompatible,
+            report: SkillRenderReport::default(),
+        });
     }
 
     let absolute = render_catalog(
@@ -545,10 +570,15 @@ pub(crate) fn render_available_skills(
         absolute
     };
 
+    let mut skill_lines = selected.skill_lines;
+    if let Some(manifest) = compact_on_demand_plugin_line(catalog) {
+        skill_lines.push(manifest);
+    }
+
     Some(AvailableSkillsRender {
         prompt_kind: selected.prompt_kind,
         skill_root_lines: selected.skill_root_lines,
-        skill_lines: selected.skill_lines,
+        skill_lines,
         preserve_empty_fragment: policy == SkillCatalogRenderPolicy::CoreCompatible,
         report: selected.report,
     })
@@ -666,6 +696,10 @@ pub(crate) fn render_combined_available_skills(
         ) {
             selected = candidate;
         }
+    }
+
+    if let Some(manifest) = compact_on_demand_plugin_line(host_catalog) {
+        selected.host.skill_lines.push(manifest);
     }
 
     RenderedSkillCatalogs {

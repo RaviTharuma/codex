@@ -1150,3 +1150,41 @@ fn substantial_description_shortening_warning_starts_above_threshold() {
         Some(SKILL_DESCRIPTION_TRUNCATED_WARNING.to_string())
     );
 }
+
+#[test]
+fn catalog_lists_on_demand_plugin_skills_in_a_compact_manifest() {
+    let mut hidden = entry(
+        "docs",
+        "Long plugin description.",
+        /*short_description*/ None,
+    )
+    .hidden_from_prompt();
+    hidden.plugin_id = Some("docs@example".to_string());
+    let catalog = SkillCatalog {
+        entries: vec![
+            entry(
+                "local",
+                "Repo-local skill.",
+                /*short_description*/ None,
+            ),
+            hidden,
+        ],
+        warnings: Vec::new(),
+    };
+
+    let fragment = available_skills_fragment(
+        &catalog,
+        /*include_skills_usage_instructions*/ false,
+        SkillCatalogRenderPolicy::CoreCompatible,
+        SkillMetadataBudget::Characters(8_000),
+    )
+    .expect("catalog should render");
+
+    assert!(fragment.body().contains("- local: Repo-local skill."));
+    assert!(!fragment.body().contains("- docs: Long plugin description."));
+    assert!(
+        fragment
+            .body()
+            .contains("- on-demand plugins (invoke with $name): docs")
+    );
+}

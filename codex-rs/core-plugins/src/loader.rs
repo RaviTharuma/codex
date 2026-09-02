@@ -368,6 +368,7 @@ pub fn remote_installed_plugins_to_config(
                 plugin_id.as_key(),
                 PluginConfig {
                     enabled: plugin.enabled,
+                    inject: Default::default(),
                     mcp_servers: HashMap::new(),
                 },
             ))

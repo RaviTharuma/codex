@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -9,6 +10,8 @@ use codex_config::ConfigLayerStack;
 use codex_config::SkillConfigRules;
 use codex_config::bundled_skills_enabled_from_stack;
 use codex_config::skill_config_rules_from_stack;
+use codex_config::types::PluginConfig;
+use codex_config::types::PluginSkillInject;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
@@ -173,9 +176,11 @@ impl HostSkillsService {
     ) -> HostSkillsSnapshot {
         let roots = self.skill_roots_for_config(input, fs).await;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
+        let on_demand_plugin_ids = on_demand_plugin_ids_from_stack(&input.config_layer_stack);
         let cache_key = config_skills_cache_key(
             &roots,
             &skill_config_rules,
+            &on_demand_plugin_ids,
             input.plugin_skill_snapshots.as_ref(),
         );
         if let Some(snapshot) = self.cached_snapshot_for_config(&cache_key) {
@@ -269,6 +274,7 @@ impl HostSkillsService {
             let cache_key = config_skills_cache_key(
                 &roots,
                 &skill_config_rules,
+                &on_demand_plugin_ids_from_stack(&input.config_layer_stack),
                 input.plugin_skill_snapshots.as_ref(),
             );
             self.snapshot_for_skill_roots(
@@ -347,7 +353,7 @@ impl HostSkillsService {
         skill_config_rules: &SkillConfigRules,
         request_root_snapshots: Option<&RequestSkillRootSnapshots>,
     ) -> SkillLoadOutcome {
-        let outcome = load_and_merge_host_skill_roots_with_request_snapshots(
+        let mut outcome = load_and_merge_host_skill_roots_with_request_snapshots(
             roots,
             &self.root_scan_slots,
             self.restriction_product,
@@ -355,6 +361,10 @@ impl HostSkillsService {
             request_root_snapshots,
         )
         .await;
+        hide_on_demand_plugin_skills(
+            &mut outcome,
+            &on_demand_plugin_ids_from_stack(&input.config_layer_stack),
+        );
         let disabled_paths = skill_config_rules.resolve_disabled_paths(
             outcome
                 .skills
@@ -455,6 +465,7 @@ impl SkillRootLoader<PluginSkillRoot> for HostSkillsService {
 struct ConfigSkillsCacheKey {
     roots: Vec<ConfigSkillRootCacheKey>,
     skill_config_rules: SkillConfigRules,
+    on_demand_plugin_ids: BTreeSet<String>,
     plugin_skill_snapshots: Option<SkillRootSnapshots<PluginSkillRoot>>,
 }
 
@@ -487,14 +498,54 @@ impl Hash for FileSystemIdentity {
 fn config_skills_cache_key(
     roots: &[HostSkillRoot],
     skill_config_rules: &SkillConfigRules,
+    on_demand_plugin_ids: &BTreeSet<String>,
     plugin_skill_snapshots: Option<&SkillRootSnapshots<PluginSkillRoot>>,
 ) -> ConfigSkillsCacheKey {
     ConfigSkillsCacheKey {
         roots: roots.iter().map(config_skill_root_cache_key).collect(),
         skill_config_rules: skill_config_rules.clone(),
+        on_demand_plugin_ids: on_demand_plugin_ids.clone(),
         plugin_skill_snapshots: plugin_skill_snapshots
             .filter(|_| roots.iter().any(|root| root.plugin_identity().is_some()))
             .cloned(),
+    }
+}
+
+fn on_demand_plugin_ids_from_stack(stack: &ConfigLayerStack) -> BTreeSet<String> {
+    let effective = stack.effective_config();
+    let Some(plugins_value) = effective.as_table().and_then(|table| table.get("plugins")) else {
+        return BTreeSet::new();
+    };
+    let Ok(plugins) = plugins_value
+        .clone()
+        .try_into::<HashMap<String, PluginConfig>>()
+    else {
+        return BTreeSet::new();
+    };
+    plugins
+        .into_iter()
+        .filter(|(_, config)| config.enabled && config.inject == PluginSkillInject::OnDemand)
+        .map(|(plugin_id, _)| plugin_id)
+        .collect()
+}
+
+fn hide_on_demand_plugin_skills(
+    outcome: &mut SkillLoadOutcome,
+    on_demand_plugin_ids: &BTreeSet<String>,
+) {
+    if on_demand_plugin_ids.is_empty() {
+        return;
+    }
+    for skill in &mut outcome.skills {
+        let Some(plugin_id) = skill.plugin_id.as_deref() else {
+            continue;
+        };
+        if !on_demand_plugin_ids.contains(plugin_id) {
+            continue;
+        }
+        let mut policy = skill.policy.clone().unwrap_or_default();
+        policy.allow_implicit_invocation = Some(false);
+        skill.policy = Some(policy);
     }
 }
 

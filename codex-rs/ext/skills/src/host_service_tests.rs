@@ -282,6 +282,56 @@ async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
     );
 }
 
+#[tokio::test]
+async fn snapshot_for_config_hides_on_demand_plugin_skills_from_implicit_listing() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    write_user_skill(&codex_home, "user", "user-skill", "from the host loader");
+    let plugin_skill_path = write_plugin_skill(
+        &codex_home,
+        "test",
+        "sample",
+        "search",
+        "search",
+        "from the plugin loader",
+    );
+    let plugin_skill_root =
+        plugin_skill_root_for_skill_path(&plugin_skill_path, "sample@test", "sample");
+    let config_layer_stack = config_stack(
+        &codex_home,
+        "[skills.bundled]\nenabled = false\n\n[plugins.\"sample@test\"]\nenabled = true\ninject = \"on_demand\"\n",
+    );
+    let input = HostSkillsLoadInput::new(
+        cwd.path().abs(),
+        vec![plugin_skill_root],
+        config_layer_stack,
+    );
+    let skills_service = HostSkillsService::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ false,
+    );
+
+    let snapshot = skills_service
+        .snapshot_for_config(&input, Some(Arc::clone(&LOCAL_FS)))
+        .await;
+    let plugin_skill = snapshot
+        .outcome()
+        .skills
+        .iter()
+        .find(|skill| skill.name == "sample:search")
+        .expect("on-demand plugin skill should stay installed");
+    let user_skill = snapshot
+        .outcome()
+        .skills
+        .iter()
+        .find(|skill| skill.name == "user-skill")
+        .expect("repo-local skill should stay installed");
+
+    assert_eq!(plugin_skill.plugin_id.as_deref(), Some("sample@test"));
+    assert!(!plugin_skill.allows_implicit_invocation());
+    assert!(user_skill.allows_implicit_invocation());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn snapshot_for_config_preserves_host_precedence_for_symlinked_plugin_root() {

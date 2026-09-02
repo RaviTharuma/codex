@@ -883,15 +883,42 @@ pub use crate::skills_config::BundledSkillsConfig;
 pub use crate::skills_config::SkillConfig;
 pub use crate::skills_config::SkillsConfig;
 
+/// When plugin skill metadata is injected into the model-visible catalog.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename_all = "snake_case")]
+pub enum PluginSkillInject {
+    /// Inject full skill metadata whenever the plugin is enabled.
+    #[default]
+    Always,
+    /// Keep the plugin installed and invokable, but do not inject its skill
+    /// descriptions into every session. A compact name list is shown instead.
+    OnDemand,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PluginConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
+    /// Controls whether this plugin's skills are injected into every session.
+    #[serde(default)]
+    pub inject: PluginSkillInject,
+
     /// Per-MCP-server policy overlays for MCP servers contributed by this plugin.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub mcp_servers: HashMap<String, PluginMcpServerConfig>,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            inject: PluginSkillInject::Always,
+            mcp_servers: HashMap::new(),
+        }
+    }
 }
 
 /// Policy settings for a plugin-provided MCP server.

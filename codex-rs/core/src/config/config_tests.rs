@@ -58,6 +58,8 @@ use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::PluginConfig;
+use codex_config::types::PluginSkillInject;
 use codex_config::types::ResumeCwdMode;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SessionPickerViewMode;
@@ -399,6 +401,38 @@ enabled = false
     );
 
     assert!(toml::from_str::<ConfigToml>("[skills]\nmax_context_tokens = 0\n").is_err());
+}
+
+#[test]
+fn parses_plugin_skill_inject_on_demand() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[plugins."docs@example"]
+enabled = true
+inject = "on_demand"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.plugins.get("docs@example"),
+        Some(&PluginConfig {
+            enabled: true,
+            inject: PluginSkillInject::OnDemand,
+            mcp_servers: Default::default(),
+        })
+    );
+    let default_cfg: ConfigToml = toml::from_str(
+        r#"
+[plugins."browser@example"]
+enabled = true
+"#,
+    )
+    .expect("omitted inject should default to always");
+    assert_eq!(
+        default_cfg.plugins["browser@example"].inject,
+        PluginSkillInject::Always
+    );
 }
 
 #[test]
