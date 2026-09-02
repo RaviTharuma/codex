@@ -177,6 +177,7 @@ pub use requirements_layers::compose_requirements;
 pub use requirements_layers::compose_requirements_for_hostname;
 pub use shell_environment_policy::validate_shell_environment_policy_filter_config;
 pub use skills_config::BundledSkillsConfig;
+pub use skills_config::DEFAULT_SKILL_LISTING_BUDGET_FRACTION;
 pub use skills_config::SkillConfig;
 pub use skills_config::SkillConfigRule;
 pub use skills_config::SkillConfigRuleSelector;

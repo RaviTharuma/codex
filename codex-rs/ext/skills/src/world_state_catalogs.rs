@@ -17,7 +17,7 @@ use crate::render::AvailableSkillsRender;
 use crate::render::RenderedSkillCatalogs;
 use crate::render::SkillMetadataBudget;
 use crate::render::render_combined_available_skills;
-use crate::render::skill_metadata_budget;
+use crate::render::skill_metadata_budget_selection;
 use crate::render_observability::CatalogSurface;
 use crate::render_observability::record_catalog_render;
 use crate::sources::SkillProviders;
@@ -90,6 +90,7 @@ pub(crate) struct CatalogContext<'a> {
     thread_state: Arc<SkillsThreadState>,
     config: SkillsExtensionConfig,
     metadata_budget: SkillMetadataBudget,
+    budget_label: String,
     include_usage: bool,
     warning_emitter: CatalogWarningEmitter,
 }
@@ -109,7 +110,13 @@ impl<'a> CatalogContext<'a> {
         let context_window = model_info
             .as_deref()
             .and_then(ModelInfo::resolved_context_window);
-        let metadata_budget = skill_metadata_budget(context_window, config.max_context_tokens);
+        let budget = skill_metadata_budget_selection(
+            context_window,
+            config.max_context_tokens,
+            config.listing_budget_fraction,
+        );
+        let metadata_budget = budget.budget;
+        let budget_label = budget.warning_label;
         let emitted_warnings = input
             .turn_store
             .get_or_init(EmittedCatalogBudgetWarnings::default);
@@ -131,6 +138,7 @@ impl<'a> CatalogContext<'a> {
             thread_state,
             config,
             metadata_budget,
+            budget_label,
             include_usage,
             warning_emitter,
         })
@@ -300,6 +308,7 @@ impl<'a> CatalogContext<'a> {
         let metrics = self.input.extension_metrics.clone();
         let warning_emitter = Arc::clone(&self.warning_emitter);
         let metadata_budget = self.metadata_budget;
+        let budget_label = self.budget_label.clone();
         let render_report = report.clone();
         let on_render: CatalogRenderCallback = Box::new(move || {
             if !include_instructions || status != CatalogStatus::Enabled {
@@ -312,7 +321,7 @@ impl<'a> CatalogContext<'a> {
                 metadata_budget,
                 &render_report,
             );
-            if let Some(message) = render_report.warning_message() {
+            if let Some(message) = render_report.warning_message(&budget_label) {
                 warning_emitter(message);
             }
         });
