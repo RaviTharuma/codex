@@ -7,6 +7,7 @@ use codex_exec_server::HttpClient;
 use codex_protocol::protocol::McpAuthStatus;
 use futures::FutureExt;
 use http::HeaderMap;
+use http::StatusCode;
 use http::header::AUTHORIZATION;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::auth::AuthError;
