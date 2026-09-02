@@ -2151,7 +2151,7 @@ async fn model_context_window_scales_executor_and_orchestrator_catalogs() -> Tes
         assert!(
             warning
                 .message
-                .starts_with("Exceeded skills context budget.")
+                .starts_with("Exceeded skills context budget of")
         );
         assert!(
             warning
