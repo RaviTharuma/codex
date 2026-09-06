@@ -16,7 +16,7 @@ fn collapses_interior_posix_and_windows_separators() {
         "/Users/me/org/some-project"
     );
     assert_eq!(
-        collapse_redundant_path_separators(r"/Users/me/org\/some-project"),
+        collapse_redundant_path_separators(r"/Users/me/org/\some-project"),
         "/Users/me/org/some-project"
     );
 }
