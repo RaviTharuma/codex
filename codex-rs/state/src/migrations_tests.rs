@@ -863,3 +863,98 @@ async fn repair_recency_migration_succeeds_while_another_connection_holds_writer
     pool.close().await;
     repair_result.expect("current migration history should not need the writer slot");
 }
+
+#[tokio::test]
+async fn project_path_separator_migration_collapses_stored_doubled_separators() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home)
+        .await
+        .expect("sqlite home should be created");
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let pool = sqlite
+        .open_read_write_pool(&sqlite.state_db_path())
+        .await
+        .expect("sqlite database should open");
+    migrator_through(/*version*/ 52)
+        .run(&pool)
+        .await
+        .expect("pre-normalization project migrations should apply");
+
+    sqlx::query(
+        r#"
+INSERT INTO projects (id, name, metadata, position, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind("00000000-0000-0000-0000-000000000053")
+    .bind("Remote")
+    .bind("{}")
+    .bind(0_i64)
+    .bind(1_700_000_000_000_i64)
+    .bind(1_700_000_000_000_i64)
+    .execute(&pool)
+    .await
+    .expect("legacy project should insert");
+    sqlx::query("INSERT INTO project_roots (project_id, position, path) VALUES (?, ?, ?)")
+        .bind("00000000-0000-0000-0000-000000000053")
+        .bind(0_i64)
+        .bind("/Users/me/org//some-project")
+        .execute(&pool)
+        .await
+        .expect("doubled-separator project root should insert");
+    sqlx::query(
+        r#"
+INSERT INTO threads (
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    created_at_ms,
+    updated_at_ms,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind("00000000-0000-0000-0000-000000000153")
+    .bind("/tmp/remote.jsonl")
+    .bind(1_700_000_000_i64)
+    .bind(1_700_000_000_i64)
+    .bind(1_700_000_000_000_i64)
+    .bind(1_700_000_000_000_i64)
+    .bind("cli")
+    .bind("openai")
+    .bind("/Users/me/org//some-project")
+    .bind("")
+    .bind("read-only")
+    .bind("on-request")
+    .execute(&pool)
+    .await
+    .expect("legacy thread should insert");
+
+    STATE_MIGRATOR
+        .run(&pool)
+        .await
+        .expect("path separator normalization should apply");
+
+    let root_path = sqlx::query_scalar::<_, String>("SELECT path FROM project_roots")
+        .fetch_one(&pool)
+        .await
+        .expect("normalized project root should load");
+    assert_eq!(root_path, "/Users/me/org/some-project");
+    let thread_cwd = sqlx::query_scalar::<_, String>("SELECT cwd FROM threads WHERE id = ?")
+        .bind("00000000-0000-0000-0000-000000000153")
+        .fetch_one(&pool)
+        .await
+        .expect("normalized thread cwd should load");
+    assert_eq!(thread_cwd, "/Users/me/org/some-project");
+
+    pool.close().await;
+}

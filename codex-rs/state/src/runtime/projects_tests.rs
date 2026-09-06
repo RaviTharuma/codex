@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -739,5 +740,72 @@ async fn initial_project_assignment_is_inserted_with_thread_row() -> anyhow::Res
 
     let deleted = runtime.delete_project(&project.id).await?.unwrap();
     assert_eq!(deleted, (vec![thread_id.to_string()], Vec::new()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_roots_and_thread_cwd_collapse_doubled_separators() -> anyhow::Result<()> {
+    let home = unique_temp_dir();
+    let runtime = StateRuntime::init(
+        crate::SqliteConfig::new_for_testing(home.as_path().abs()),
+        "test-provider".to_string(),
+    )
+    .await?;
+    let thread_id = ThreadId::default();
+    let mut metadata = ThreadMetadataBuilder::new(
+        thread_id,
+        home.join("thread.jsonl"),
+        chrono::Utc::now(),
+        SessionSource::Cli,
+    )
+    .build("test-provider");
+    metadata.cwd = PathBuf::from("/Users/me/org//some-project");
+    runtime.upsert_thread(&metadata).await?;
+    assert_eq!(
+        runtime.get_thread(thread_id).await?.unwrap().cwd,
+        PathBuf::from("/Users/me/org/some-project")
+    );
+
+    let project = runtime
+        .create_project(
+            "Remote".to_string(),
+            vec![ProjectRoot {
+                path: "/Users/me/org//some-project".to_string(),
+            }],
+            BTreeMap::new(),
+            &[],
+            "state:normalize-remote-path",
+        )
+        .await?
+        .project;
+    assert_eq!(
+        project.roots,
+        vec![ProjectRoot {
+            path: "/Users/me/org/some-project".to_string(),
+        }]
+    );
+    assert_eq!(
+        runtime.get_project(&project.id).await?.unwrap().roots,
+        project.roots
+    );
+
+    let (updated, changed) = runtime
+        .update_project(
+            &project.id,
+            /*name*/ None,
+            Some(vec![ProjectRoot {
+                path: r"C:\Users\me\org\\other-project".to_string(),
+            }]),
+            /*metadata*/ None,
+        )
+        .await?
+        .unwrap();
+    assert!(changed);
+    assert_eq!(
+        updated.roots,
+        vec![ProjectRoot {
+            path: r"C:\Users\me\org\other-project".to_string(),
+        }]
+    );
     Ok(())
 }

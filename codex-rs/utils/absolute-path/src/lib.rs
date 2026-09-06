@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 mod absolutize;
+mod path_separators;
 
 /// A path that is guaranteed to be absolute and normalized (though it is not
 /// guaranteed to be canonicalized or exist on the filesystem).
@@ -141,15 +142,28 @@ impl AbsolutePathBuf {
     }
 }
 
+pub use path_separators::collapse_redundant_path_separators;
+
 fn normalize_path_for_platform(path: &Path) -> Cow<'_, Path> {
+    let collapsed = match path.to_str() {
+        Some(text) => {
+            let collapsed = collapse_redundant_path_separators(text);
+            if collapsed == text {
+                Cow::Borrowed(path)
+            } else {
+                Cow::Owned(PathBuf::from(collapsed))
+            }
+        }
+        None => Cow::Borrowed(path),
+    };
     if cfg!(windows)
-        && let Some(path) = path.to_str()
+        && let Some(path) = collapsed.to_str()
         && let Some(normalized) = normalize_windows_device_path(path)
     {
         return Cow::Owned(PathBuf::from(normalized));
     }
 
-    Cow::Borrowed(path)
+    collapsed
 }
 
 /// Normalizes Windows drive and UNC namespace aliases on any host.
@@ -397,6 +411,7 @@ mod tests {
     use crate::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::path::Path;
     #[cfg(unix)]
     use std::process::Command;
     use tempfile::tempdir;
@@ -659,6 +674,14 @@ mod tests {
 
         assert_eq!(inner_path.as_path(), inner_home.path().join("project"));
         assert_eq!(restored_path.as_path(), outer_home.path().join("project"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_absolute_path_collapses_interior_doubled_separators() {
+        let path = AbsolutePathBuf::from_absolute_path("/Users/me/org//some-project")
+            .expect("absolute path should parse");
+        assert_eq!(path.as_path(), Path::new("/Users/me/org/some-project"));
     }
 
     #[test]

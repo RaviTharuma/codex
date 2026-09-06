@@ -15,6 +15,7 @@ use crate::ProjectRoot;
 use crate::ProjectSortKey;
 use crate::ProjectsPage;
 use crate::SortDirection;
+use codex_utils_absolute_path::collapse_redundant_path_separators;
 
 const PROJECT_SELECT: &str = "SELECT projects.*,
     (SELECT MAX(recency_at_ms) FROM threads
@@ -177,6 +178,7 @@ impl StateRuntime {
                 anyhow::bail!("thread not found: {thread_id}");
             }
         }
+        let roots = normalize_project_roots(roots);
         let id = Uuid::now_v7().to_string();
         let now = chrono::Utc::now().timestamp_millis();
         let position = sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(position) FROM projects")
@@ -247,7 +249,7 @@ impl StateRuntime {
         };
         let current = project_from_row_in_tx(&mut tx, &row).await?;
         let next_name = name.unwrap_or_else(|| current.name.clone());
-        let next_roots = roots.unwrap_or_else(|| current.roots.clone());
+        let next_roots = roots.map_or_else(|| current.roots.clone(), normalize_project_roots);
         let next_metadata = metadata.unwrap_or_else(|| current.metadata.clone());
         if next_name == current.name
             && next_roots == current.roots
@@ -423,7 +425,7 @@ async fn replace_roots(
         sqlx::query("INSERT INTO project_roots (project_id, position, path) VALUES (?, ?, ?)")
             .bind(project_id)
             .bind(position as i64)
-            .bind(&root.path)
+            .bind(collapse_redundant_path_separators(&root.path))
             .execute(&mut **tx)
             .await?;
     }
@@ -566,6 +568,15 @@ fn parse_project_cursor(
         return Err(invalid());
     }
     Ok((value, id.to_string()))
+}
+
+fn normalize_project_roots(roots: Vec<ProjectRoot>) -> Vec<ProjectRoot> {
+    roots
+        .into_iter()
+        .map(|root| ProjectRoot {
+            path: collapse_redundant_path_separators(&root.path),
+        })
+        .collect()
 }
 
 #[cfg(test)]

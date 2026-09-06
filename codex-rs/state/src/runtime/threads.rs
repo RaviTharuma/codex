@@ -2,8 +2,15 @@ use super::*;
 use crate::SortDirection;
 use codex_protocol::SanitizedGitUrl;
 use codex_protocol::protocol::SessionSource;
+use codex_utils_absolute_path::collapse_redundant_path_separators;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+
+fn stored_thread_cwd(cwd: &Path) -> String {
+    cwd.to_str()
+        .map(collapse_redundant_path_separators)
+        .unwrap_or_else(|| cwd.display().to_string())
+}
 
 impl StateRuntime {
     pub async fn get_thread(&self, id: ThreadId) -> anyhow::Result<Option<crate::ThreadMetadata>> {
@@ -447,7 +454,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
         builder.push_bind(title);
         if let Some(cwd) = cwd {
             builder.push(" AND threads.cwd = ");
-            builder.push_bind(cwd.display().to_string());
+            builder.push_bind(stored_thread_cwd(cwd));
         }
         push_thread_order_and_limit(
             &mut builder,
@@ -676,7 +683,7 @@ ON CONFLICT(id) DO NOTHING
                 .as_ref()
                 .map(crate::extract::enum_to_string),
         )
-        .bind(metadata.cwd.display().to_string())
+        .bind(stored_thread_cwd(&metadata.cwd))
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
         .bind(metadata.name.as_deref())
@@ -986,7 +993,7 @@ ON CONFLICT(id) DO UPDATE SET
                 .as_ref()
                 .map(crate::extract::enum_to_string),
         )
-        .bind(metadata.cwd.display().to_string())
+        .bind(stored_thread_cwd(&metadata.cwd))
         .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
         .bind(metadata.name.as_deref())
@@ -1434,7 +1441,7 @@ fn push_thread_filters_with_preview<'a>(
             builder.push(" AND threads.cwd IN (");
             let mut separated = builder.separated(", ");
             for cwd in cwd_filters {
-                separated.push_bind(cwd.display().to_string());
+                separated.push_bind(stored_thread_cwd(cwd));
             }
             separated.push_unseparated(")");
         }
